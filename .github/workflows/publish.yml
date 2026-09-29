@@ -1,0 +1,73 @@
+# Builds protonminingco.com from its source repository and deploys it to GitHub Pages.
+#
+# The source repository runs the full test suite on every push to its main branch, then writes
+# the verified commit into SOURCE_SHA here. That push starts this workflow, which checks the
+# same commit out with a read-only deploy key, assembles the site with tools/build-pages.js
+# (which verifies the tree it builds) and deploys the result as a Pages artifact. No site
+# files are committed to this repository.
+name: Publish protonminingco.com
+
+on:
+  push:
+    branches: [main]
+    paths: [SOURCE_SHA]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One publish at a time; a queued publish waits rather than cancelling one in flight.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: publisher
+
+      - name: Read the source commit
+        id: source
+        run: |
+          sha="$(tr -d '[:space:]' < publisher/SOURCE_SHA)"
+          if ! printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::SOURCE_SHA must be a full 40-character commit id"; exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: Rbagatoli/ion-mining-group
+          ref: ${{ steps.source.outputs.sha }}
+          ssh-key: ${{ secrets.SOURCE_DEPLOY_KEY }}
+          persist-credentials: false
+          path: source
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Assemble and verify the site tree
+        working-directory: source
+        run: node tools/build-pages.js
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: source/_site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
